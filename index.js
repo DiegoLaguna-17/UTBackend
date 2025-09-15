@@ -67,6 +67,64 @@ app.get('/proyectos',async (req,res)=>{
     
 
 });
+app.post('/encuestas', async (req, res) => {
+  try {
+    const { titulo, proyectoId, administradorId, preguntas } = req.body;
+
+    // 1️⃣ Insertar la encuesta
+    const { data: encuestaData, error: encuestaError } = await supabase
+      .from('encuesta')
+      .insert([{
+        titulo,
+        proyecto_idproyecto: proyectoId,
+        administrador_idadmin: administradorId,
+        fecha: new Date().toISOString().split('T')[0]
+      }])
+      .select()
+      .single();
+
+    if (encuestaError) throw encuestaError;
+
+    const encuestaId = encuestaData.idencuesta;
+
+    // 2️⃣ Insertar preguntas
+    for (const preg of preguntas) {
+      const { data: preguntaData, error: preguntaError } = await supabase
+        .from('pregunta')
+        .insert([{
+          encuesta_idencuesta: encuestaId,
+          pregunta: preg.pregunta,   // <-- asegúrate que Flutter envíe 'pregunta'
+          tipo: preg.tipo
+        }])
+        .select()
+        .single();
+
+      if (preguntaError) throw preguntaError;
+
+      const preguntaId = preguntaData.idpregunta;
+
+      // 3️⃣ Insertar opciones si existen (solo múltiple o escala)
+      if (preg.opciones && preg.opciones.length > 0) {
+        const opcionesArray = preg.opciones.map(op => ({
+          pregunta_idpregunta: preguntaId,  // <-- corregido
+          opcion: op
+        }));
+
+        const { error: opcionesError } = await supabase
+          .from('opcion')
+          .insert(opcionesArray);
+
+        if (opcionesError) throw opcionesError;
+      }
+    }
+
+    res.status(200).json({ message: 'Encuesta creada con éxito', encuestaId });
+  } catch (error) {
+    console.error('Error al crear encuesta:', error);
+    res.status(500).json({ error: error.message || error });
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
