@@ -338,6 +338,36 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+// ENDPOINT PARA OBTENER TODAS LAS ENCUESTAS (ADMIN)
+app.get('/encuestas/all', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('encuesta')
+      .select(`
+        idencuesta,
+        proyecto:proyecto_idproyecto(nombre),
+        titulo,
+        fecha
+      `);
+    if (error) {
+      console.error('Error Supabase: ', error);
+      return res.status(500).json({ error: error.message || error });
+    }
+
+    const encuestas = data.map(e => ({
+      id: e.idencuesta,
+      proyecto: e.proyecto?.nombre || null,
+      titulo: e.titulo,
+      fecha: e.fecha
+    }));
+
+    res.json(encuestas);
+  } catch (error) {
+    console.error('Error general: ', error);
+    res.status(500).json({ error: error.message || error});
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
