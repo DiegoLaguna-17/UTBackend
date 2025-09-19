@@ -348,3 +348,50 @@ app.listen(PORT, () => {
   console.log(`   GET  /proyectos`);
   console.log(`   GET  /`);
 });
+
+// Obtener encuestas de un cliente específico
+app.get('/encuestas/cliente/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 1️⃣ Obtener proyectos del cliente
+    const { data: proyectos, error: proyectosError } = await supabase
+      .from('proyecto_cliente')
+      .select('idproyecto')
+      .eq('idcliente', id);
+
+    if (proyectosError) throw proyectosError;
+    if (!proyectos || proyectos.length === 0) {
+      return res.json([]); // Cliente sin proyectos → sin encuestas
+    }
+
+    const proyectosIds = proyectos.map(p => p.idproyecto);
+
+    // 2️⃣ Obtener encuestas de esos proyectos
+    const { data: encuestas, error: encuestasError } = await supabase
+      .from('encuesta')
+      .select(`
+        idencuesta,
+        titulo,
+        fecha,
+        proyecto(nombre)
+      `)
+      .in('proyecto_idproyecto', proyectosIds);
+
+    if (encuestasError) throw encuestasError;
+
+    // 3️⃣ Dar formato a la respuesta
+    const resultado = encuestas.map(e => ({
+      id: e.idencuesta,
+      titulo: e.titulo,
+      fecha: e.fecha,
+      proyecto: e.proyecto?.nombre || null
+    }));
+
+    res.json(resultado);
+
+  } catch (err) {
+    console.error('Error obteniendo encuestas del cliente:', err);
+    res.status(500).json({ error: err.message || err });
+  }
+});
