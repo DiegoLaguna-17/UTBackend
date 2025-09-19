@@ -368,6 +368,106 @@ app.get('/encuestas/all', async (req, res) => {
   }
 });
 
+app.get('/encuestas/:idencuesta/preguntas', async (req, res) => {
+  try {
+    const { idencuesta } = req.params;
+
+    const { data, error } = await supabase
+    .from('pregunta')
+    .select(`
+      idpregunta,
+      encuesta:encuesta_idencuesta(titulo),
+      pregunta,
+      tipo  
+    `)
+    .eq('encuesta_idencuesta', idencuesta);
+
+    if (error) {
+      console.error('Error Supabase: ', error);
+      return res.statusCode(500).json({ error: error.message || error});
+    }
+    if (data.length === 0) {
+      return res.statusCode(404).json({message: 'No se encontraron preguntas para esta encuestas'});
+    }
+
+    const preguntas = data.map((e) => ({
+      id: e.idpregunta,
+      encuesta: e.encuesta?.titulo,
+      pregunta: e.pregunta,
+      tipo: e.tipo
+    }));
+
+    res.json(preguntas);
+  } catch (error) {
+    console.error('Error general: ', error);
+    return res.statusCode(500).json({error: error.message || error });
+  }
+});
+
+app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
+  try {
+    const { idencuesta } = req.params;
+
+    const { data: preguntas, error: preguntasError } = await supabase
+      .from('pregunta')
+      .select(`
+        idpregunta,
+        pregunta,
+        tipo,
+        opcion(idopcion, opcion)
+      `)
+      .eq('encuesta_idencuesta', idencuesta)
+      .eq('tipo', 'opcion_multiple'); 
+
+    if (preguntasError) throw preguntasError;
+
+    const preguntasConRespuestas = await Promise.all(
+      preguntas.map(async (pregunta) => {
+        const conteoOpciones = await Promise.all(
+          pregunta.opcion.map(async (opcion) => {
+            const { count, error } = await supabase
+              .from('respuestas')
+              .select('*', { count: 'exact', head: true })
+              .eq('idopcion', opcion.idopcion);
+
+            if (error) {
+              console.error(`Error counting option ${opcion.idopcion}:`, error);
+              return { opcion: opcion.opcion, conteo: 0 };
+            }
+            return { opcion: opcion.opcion, conteo: count };
+          })
+        );
+
+        const totalPregunta = conteoOpciones.reduce((sum, item) => sum + item.conteo, 0);
+
+        const porcentajesOpciones = conteoOpciones.map(op => ({
+          ...op,
+          porcentaje: totalPregunta > 0 ? (op.conteo / totalPregunta) * 100 : 0
+        }));
+
+        return {
+          idpregunta: pregunta.idpregunta,
+          pregunta: pregunta.pregunta,
+          tipo: pregunta.tipo,
+          total_respuestas: totalPregunta,
+          opciones: porcentajesOpciones
+        };
+      })
+    );
+
+    const totalRespuestasEncuesta = preguntasConRespuestas.reduce((sum, p) => sum + p.total_respuestas, 0);
+
+    res.json({
+        totalRespuestas: totalRespuestasEncuesta,
+        preguntas: preguntasConRespuestas
+    });
+
+  } catch (error) {
+    console.error('Error fetching survey results:', error);
+    res.status(500).json({ error: error.message || 'An internal server error occurred' });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
