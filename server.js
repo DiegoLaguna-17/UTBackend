@@ -404,43 +404,62 @@ app.get('/encuestas/:idencuesta/preguntas', async (req, res) => {
   }
 });
 
+// Helper function to process questions with options (multiple choice, scale)
+const procesarPreguntasConOpciones = async (preguntas, supabase) => {
+  return Promise.all(
+    preguntas.map(async (pregunta) => {
+      const conteoOpciones = await Promise.all(
+        pregunta.opcion.map(async (opcion) => {
+          const { count, error } = await supabase
+            .from('respuestas')
+            .select('*', { count: 'exact', head: true })
+            .eq('idopcion', opcion.idopcion);
+          if (error) {
+            console.error(`Error counting option ${opcion.idopcion}:`, error);
+            return { opcion: opcion.opcion, conteo: 0 };
+          }
+          return { opcion: opcion.opcion, conteo: count };
+        })
+      );
+
+      const totalPregunta = conteoOpciones.reduce((sum, item) => sum + item.conteo, 0);
+
+      const porcentajesOpciones = conteoOpciones.map(op => ({
+        ...op,
+        porcentaje: totalPregunta > 0 ? (op.conteo / totalPregunta) * 100 : 0
+      }));
+
+      return {
+        idpregunta: pregunta.idpregunta,
+        pregunta: pregunta.pregunta,
+        tipo: pregunta.tipo,
+        total_respuestas: totalPregunta,
+        opciones: porcentajesOpciones
+      };
+    })
+  );
+};
+
 app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
   try {
     const { idencuesta } = req.params;
-    const { data: preguntasMultiples, error: preguntasMultiplesError } = await supabase
+    const { data: preguntasMultiplesRaw, error: preguntasMultiplesError } = await supabase
       .from('pregunta')
       .select('idpregunta, pregunta, tipo, opcion(idopcion, opcion)')
       .eq('encuesta_idencuesta', idencuesta)
       .eq('tipo', 'opcion_multiple');
 
     if (preguntasMultiplesError) throw preguntasMultiplesError;
+    const preguntasOpcionMultiple = await procesarPreguntasConOpciones(preguntasMultiplesRaw, supabase);
 
-    const preguntasOpcionMultiple = await Promise.all(
-      preguntasMultiples.map(async (pregunta) => {
-        const conteoOpciones = await Promise.all(
-          pregunta.opcion.map(async (opcion) => {
-            const { count, error } = await supabase
-              .from('respuestas')
-              .select('*', { count: 'exact', head: true })
-              .eq('idopcion', opcion.idopcion);
-            if (error) return { opcion: opcion.opcion, conteo: 0 };
-            return { opcion: opcion.opcion, conteo: count };
-          })
-        );
-        const totalPregunta = conteoOpciones.reduce((sum, item) => sum + item.conteo, 0);
-        const porcentajesOpciones = conteoOpciones.map(op => ({
-          ...op,
-          porcentaje: totalPregunta > 0 ? (op.conteo / totalPregunta) * 100 : 0
-        }));
-        return {
-          idpregunta: pregunta.idpregunta,
-          pregunta: pregunta.pregunta,
-          tipo: pregunta.tipo,
-          total_respuestas: totalPregunta,
-          opciones: porcentajesOpciones
-        };
-      })
-    );
+    const { data: preguntasEscalaRaw, error: preguntasEscalaError } = await supabase
+      .from('pregunta')
+      .select('idpregunta, pregunta, tipo, opcion(idopcion, opcion)')
+      .eq('encuesta_idencuesta', idencuesta)
+      .eq('tipo', 'escala');
+
+    if (preguntasEscalaError) throw preguntasEscalaError;
+    const preguntasEscala = await procesarPreguntasConOpciones(preguntasEscalaRaw, supabase);
 
     const { data: preguntasAbiertasRaw, error: preguntasAbiertasError } = await supabase
       .from('pregunta')
@@ -468,11 +487,14 @@ app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
       })
     );
 
-    const totalRespuestasEncuesta = preguntasOpcionMultiple.reduce((sum, p) => sum + p.total_respuestas, 0);
+    const totalMultiples = preguntasOpcionMultiple.reduce((sum, p) => sum + p.total_respuestas, 0);
+    const totalEscala = preguntasEscala.reduce((sum, p) => sum + p.total_respuestas, 0);
+    const totalRespuestasEncuesta = totalMultiples + totalEscala;
 
     res.json({
       totalRespuestas: totalRespuestasEncuesta,
       preguntasOpcionMultiple: preguntasOpcionMultiple,
+      preguntasEscala: preguntasEscala,
       preguntasAbiertas: preguntasAbiertas,
     });
 
