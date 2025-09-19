@@ -350,48 +350,352 @@ app.listen(PORT, () => {
 });
 
 // Obtener encuestas de un cliente específico
-app.get('/encuestas/cliente/:id', async (req, res) => {
+app.get('/encuestas/cliente/:idCliente', async (req, res) => {
   try {
-    const { id } = req.params;
+    const { idCliente } = req.params;
+    console.log('cliente id: ' + idCliente);
 
-    // 1️⃣ Obtener proyectos del cliente
-    const { data: proyectos, error: proyectosError } = await supabase
-      .from('proyecto_cliente')
-      .select('idproyecto')
-      .eq('idcliente', id);
-
-    if (proyectosError) throw proyectosError;
-    if (!proyectos || proyectos.length === 0) {
-      return res.json([]); // Cliente sin proyectos → sin encuestas
+    // Validar que el idCliente sea un número válido
+    const clienteId = parseInt(idCliente);
+    if (isNaN(clienteId)) {
+      return res.status(400).json({ error: 'ID de cliente inválido' });
     }
 
-    const proyectosIds = proyectos.map(p => p.idproyecto);
+    // Primero obtenemos los proyectos del cliente
+    const { data: proyectosCliente, error: errorProyectos } = await supabase
+      .from('proyecto_cliente')
+      .select('idproyecto')
+      .eq('idcliente', clienteId);
 
-    // 2️⃣ Obtener encuestas de esos proyectos
-    const { data: encuestas, error: encuestasError } = await supabase
+    if (errorProyectos) {
+      console.error('Error proyectos cliente:', errorProyectos);
+      return res.status(500).json({ error: errorProyectos.message });
+    }
+
+    // Si el cliente no tiene proyectos, retornar array vacío
+    if (!proyectosCliente || proyectosCliente.length === 0) {
+      return res.json([]);
+    }
+
+    const proyectoIds = proyectosCliente
+      .map(p => parseInt(p.idproyecto))
+      .filter(id => !isNaN(id));
+    
+    console.log('proyectos: ', proyectoIds);
+
+    // Luego traemos las encuestas de esos proyectos
+    const { data: encuestasData, error: errorEncuestas } = await supabase
       .from('encuesta')
       .select(`
         idencuesta,
         titulo,
         fecha,
-        proyecto(nombre)
+        proyecto_idproyecto,
+        proyecto:proyecto_idproyecto (nombre)
       `)
-      .in('proyecto_idproyecto', proyectosIds);
+      .in('proyecto_idproyecto', proyectoIds);
 
-    if (encuestasError) throw encuestasError;
+    if (errorEncuestas) {
+      console.error('Error encuestas:', errorEncuestas);
+      return res.status(500).json({ error: errorEncuestas.message });
+    }
 
-    // 3️⃣ Dar formato a la respuesta
-    const resultado = encuestas.map(e => ({
+    // Si no hay encuestas, retornar array vacío
+    if (!encuestasData || encuestasData.length === 0) {
+      return res.json([]);
+    }
+
+    const encuestasIds = encuestasData
+      .map(e => parseInt(e.idencuesta))
+      .filter(id => !isNaN(id));
+
+    // Buscar respuestas del cliente específico para estas encuestas
+    const { data: respuestasCliente, error: errorRespuestas } = await supabase
+      .from('respuesta')
+      .select('encuesta_idencuesta')
+      .in('encuesta_idencuesta', encuestasIds)
+      .eq('cliente_idcliente', clienteId);
+
+    if (errorRespuestas) {
+      console.error('Error respuestas:', errorRespuestas);
+      return res.status(500).json({ error: errorRespuestas.message });
+    }
+
+    // Crear conjunto de encuestas que YA fueron respondidas por este cliente
+    const encuestasRespondidas = new Set();
+    if (respuestasCliente) {
+      respuestasCliente.forEach(r => {
+        encuestasRespondidas.add(parseInt(r.encuesta_idencuesta));
+      });
+    }
+
+    // Filtrar encuestas que NO han sido respondidas por este cliente
+    const encuestasNoRespondidas = encuestasData.filter(e => {
+      return !encuestasRespondidas.has(parseInt(e.idencuesta));
+    });
+
+    // Mapear al formato final
+    const encuestas = encuestasNoRespondidas.map(e => ({
       id: e.idencuesta,
       titulo: e.titulo,
       fecha: e.fecha,
-      proyecto: e.proyecto?.nombre || null
+      proyecto: e.proyecto ? e.proyecto.nombre : null,
     }));
 
-    res.json(resultado);
+    res.json(encuestas);
 
   } catch (err) {
-    console.error('Error obteniendo encuestas del cliente:', err);
+    console.error('Error general:', err);
+    res.status(500).json({ error: err.message || 'Error interno del servidor' });
+  }
+});
+app.get('/encuestas/respuestas/:idEncuesta/:idCliente', async (req, res) => {
+  try {
+    const { idEncuesta, idCliente } = req.params;
+    console.log('encuesta '+idEncuesta)
+    console.log('cliente '+idCliente)
+    // 1️⃣ Obtener la respuesta general del cliente para la encuesta
+    const { data: respuestaData, error: errorRespuesta } = await supabase
+  .from('respuesta')  // mayúscula R
+  .select('idrespuesta')
+  .eq('encuesta_idencuesta', parseInt(idEncuesta))
+  .eq('cliente_idcliente', parseInt(idCliente))
+  .single();
+
+if (errorRespuesta) {
+  console.error('Error al obtener la respuesta general:', errorRespuesta);
+  return res.status(500).json({ error: errorRespuesta.message || errorRespuesta });
+}
+
+if (!respuestaData) {
+  return res.status(404).json({ message: 'El cliente no ha respondido esta encuesta' });
+}
+
+console.log('id respuesta ' + respuestaData.idrespuesta);
+const idRespuesta = respuestaData.idrespuesta;
+
+    // 2️⃣ Obtener los detalles de cada respuesta
+    const { data: detalles, error: errorDetalles } = await supabase
+      .from('respuestas')
+      .select(`
+        pregunta_idpregunta,
+        contenido_texto,
+        idopcion,
+        pregunta:pregunta(pregunta, tipo),
+        opcion:opcion(opcion)
+      `)
+      .eq('respuesta_idrespuesta', idRespuesta);
+
+    if (errorDetalles) {
+      console.error('Error al obtener detalles de la respuesta:', errorDetalles);
+      return res.status(500).json({ error: errorDetalles.message || errorDetalles });
+    }
+
+    // Devolver un formato más legible
+    const resultado = detalles.map(d => ({
+      idPregunta: d.Pregunta_IDPregunta,
+      tipo: d.pregunta?.tipo,
+      pregunta: d.pregunta?.pregunta,
+      respuestaTexto: d.contenido_texto || null,
+      opcionSeleccionada: d.opcion?.opcion || null
+    }));
+    console.log(resultado)
+    res.json(resultado);
+
+
+
+  } catch (err) {
+    console.error('Error general:', err);
     res.status(500).json({ error: err.message || err });
+  }
+});
+app.get('/encuestas/cliente/:idCliente/respondidas', async (req, res) => {
+  try {
+    const { idCliente } = req.params;
+    console.log('cliente id: ' + idCliente);
+
+    // Validar que el idCliente sea un número válido
+    const clienteId = parseInt(idCliente);
+    if (isNaN(clienteId)) {
+      return res.status(400).json({ error: 'ID de cliente inválido' });
+    }
+
+    // Primero obtenemos los proyectos del cliente
+    const { data: proyectosCliente, error: errorProyectos } = await supabase
+      .from('proyecto_cliente')
+      .select('idproyecto')
+      .eq('idcliente', clienteId);
+
+    if (errorProyectos) {
+      console.error('Error proyectos cliente:', errorProyectos);
+      return res.status(500).json({ error: errorProyectos.message });
+    }
+
+    // Si el cliente no tiene proyectos, retornar array vacío
+    if (!proyectosCliente || proyectosCliente.length === 0) {
+      return res.json([]);
+    }
+
+    const proyectoIds = proyectosCliente
+      .map(p => parseInt(p.idproyecto))
+      .filter(id => !isNaN(id));
+    
+    console.log('proyectos: ', proyectoIds);
+
+    // Buscar respuestas del cliente específico
+    const { data: respuestasCliente, error: errorRespuestas } = await supabase
+      .from('respuesta')
+      .select(`
+        encuesta_idencuesta,
+        encuesta:encuesta_idencuesta (
+          idencuesta,
+          titulo,
+          fecha,
+          proyecto_idproyecto,
+          proyecto:proyecto_idproyecto (nombre)
+        )
+      `)
+      .eq('cliente_idcliente', clienteId);
+
+    if (errorRespuestas) {
+      console.error('Error respuestas:', errorRespuestas);
+      return res.status(500).json({ error: errorRespuestas.message });
+    }
+
+    // Si no hay respuestas, retornar array vacío
+    if (!respuestasCliente || respuestasCliente.length === 0) {
+      return res.json([]);
+    }
+
+    // Filtrar solo las encuestas que pertenecen a proyectos del cliente
+    const encuestasRespondidas = respuestasCliente
+      .filter(r => r.encuesta && proyectoIds.includes(parseInt(r.encuesta.proyecto_idproyecto)))
+      .map(r => ({
+        id: r.encuesta.idencuesta,
+        titulo: r.encuesta.titulo,
+        fecha: r.encuesta.fecha,
+        proyecto: r.encuesta.proyecto ? r.encuesta.proyecto.nombre : null,
+        fecha_respuesta: r.fecha_creacion // Opcional: incluir fecha de respuesta
+      }));
+
+    // Eliminar duplicados (por si hay múltiples respuestas a la misma encuesta)
+    const encuestasUnicas = encuestasRespondidas.filter((encuesta, index, self) =>
+      index === self.findIndex(e => e.id === encuesta.id)
+    );
+
+    res.json(encuestasUnicas);
+
+  } catch (err) {
+    console.error('Error general:', err);
+    res.status(500).json({ error: err.message || 'Error interno del servidor' });
+  }
+});
+
+app.post('/encuesta/responder', async (req, res) => {
+  try {
+    const { idEncuesta, idCliente, respuestas } = req.body;
+    // respuestas = [{ idPregunta: 3, contenido_texto: "hola" }, { idPregunta: 4, idOpcion: 5 }]
+
+    // Insertamos en Respuesta
+    const { data: respuestaData, error: errorRespuesta } = await supabase
+      .from('respuesta')
+      .insert([{
+        encuesta_idencuesta: idEncuesta,
+        cliente_idcliente: idCliente,
+        fecha: new Date()
+      }])
+      .select()
+      .single();
+
+    if (errorRespuesta) {
+      console.error(errorRespuesta);
+      return res.status(500).json({ error: errorRespuesta.message });
+    }
+
+    const idRespuesta = respuestaData.idrespuesta;
+
+    // Preparamos los detalles
+    const detalles = respuestas.map(r => ({
+      respuesta_idrespuesta: idRespuesta,
+      pregunta_idpregunta: r.idPregunta,
+      contenido_texto: r.contenido_texto || null,
+      idopcion: r.idOpcion || null
+    }));
+
+    const { error: errorDetalles } = await supabase
+      .from('respuestas')
+      .insert(detalles);
+
+    if (errorDetalles) {
+      console.error(errorDetalles);
+      return res.status(500).json({ error: errorDetalles.message });
+    }
+
+    res.json({ message: "Respuestas guardadas correctamente" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error en el servidor" });
+  }
+});
+
+app.get('/encuesta/preguntas/:idEncuesta', async (req, res) => {
+  try {
+    const { idEncuesta } = req.params;
+    console.log('Encuesta id: ' + idEncuesta);
+
+    // 1️⃣ Traer la encuesta
+    const { data: encuesta, error: errorEncuesta } = await supabase
+      .from('encuesta')
+      .select('*')
+      .eq('idencuesta', idEncuesta)
+      .single(); // single() devuelve un objeto en lugar de array
+
+    if (errorEncuesta || !encuesta) {
+      console.error('Error al obtener la encuesta:', errorEncuesta);
+      return res.status(404).json({ error: 'Encuesta no encontrada' });
+    }
+
+    // 2️⃣ Traer las preguntas
+    const { data: preguntas, error: errorPreguntas } = await supabase
+      .from('pregunta')
+      .select('*')
+      .eq('encuesta_idencuesta', idEncuesta);
+
+    if (errorPreguntas) {
+      console.error('Error al obtener preguntas:', errorPreguntas);
+      return res.status(500).json({ error: errorPreguntas.message });
+    }
+
+    // 3️⃣ Traer opciones para cada pregunta de tipo multiple o escala
+    const preguntasConOpciones = await Promise.all(
+      preguntas.map(async (p) => {
+        let opciones = [];
+        if (p.tipo === 'opcion_multiple' || p.tipo === 'escala') {
+          const { data: opts, error: errorOpciones } = await supabase
+            .from('opcion')
+            .select('*')
+            .eq('pregunta_idpregunta', p.idpregunta);
+
+          if (errorOpciones) {
+            console.error('Error al obtener opciones:', errorOpciones);
+          } else {
+            opciones = opts;
+          }
+        }
+        return { ...p, opciones };
+      })
+    );
+
+    // 4️⃣ Devolver JSON
+    res.json({
+      IDEncuesta: encuesta.IDEncuesta,
+      titulo: encuesta.titulo,
+      preguntas: preguntasConOpciones
+    });
+
+  } catch (err) {
+    console.error('Error interno del servidor:', err);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
