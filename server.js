@@ -338,10 +338,11 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-// ENDPOINT PARA OBTENER TODAS LAS ENCUESTAS (ADMIN)
 app.get('/encuestas/all', async (req, res) => {
   try {
-    const { data, error } = await supabase
+    const { proyectoId } = req.query;
+
+    let query = supabase
       .from('encuesta')
       .select(`
         idencuesta,
@@ -349,6 +350,13 @@ app.get('/encuestas/all', async (req, res) => {
         titulo,
         fecha
       `);
+
+    if (proyectoId) {
+      query = query.eq('proyecto_idproyecto', proyectoId);
+    }
+    
+    const { data, error } = await query;
+
     if (error) {
       console.error('Error Supabase: ', error);
       return res.status(500).json({ error: error.message || error });
