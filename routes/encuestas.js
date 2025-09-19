@@ -6,4 +6,7 @@ const router = express.Router();
 router.post('/', crearEncuesta);
 router.get('/', getEncuestas);
 
+// Encuestas filtradas por cliente
+router.get('/cliente/:id', getEncuestasByCliente);
+
 export default router;
