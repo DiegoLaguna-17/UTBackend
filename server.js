@@ -407,44 +407,31 @@ app.get('/encuestas/:idencuesta/preguntas', async (req, res) => {
 app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
   try {
     const { idencuesta } = req.params;
-
-    const { data: preguntas, error: preguntasError } = await supabase
+    const { data: preguntasMultiples, error: preguntasMultiplesError } = await supabase
       .from('pregunta')
-      .select(`
-        idpregunta,
-        pregunta,
-        tipo,
-        opcion(idopcion, opcion)
-      `)
+      .select('idpregunta, pregunta, tipo, opcion(idopcion, opcion)')
       .eq('encuesta_idencuesta', idencuesta)
-      .eq('tipo', 'opcion_multiple'); 
+      .eq('tipo', 'opcion_multiple');
 
-    if (preguntasError) throw preguntasError;
+    if (preguntasMultiplesError) throw preguntasMultiplesError;
 
-    const preguntasConRespuestas = await Promise.all(
-      preguntas.map(async (pregunta) => {
+    const preguntasOpcionMultiple = await Promise.all(
+      preguntasMultiples.map(async (pregunta) => {
         const conteoOpciones = await Promise.all(
           pregunta.opcion.map(async (opcion) => {
             const { count, error } = await supabase
               .from('respuestas')
               .select('*', { count: 'exact', head: true })
               .eq('idopcion', opcion.idopcion);
-
-            if (error) {
-              console.error(`Error counting option ${opcion.idopcion}:`, error);
-              return { opcion: opcion.opcion, conteo: 0 };
-            }
+            if (error) return { opcion: opcion.opcion, conteo: 0 };
             return { opcion: opcion.opcion, conteo: count };
           })
         );
-
         const totalPregunta = conteoOpciones.reduce((sum, item) => sum + item.conteo, 0);
-
         const porcentajesOpciones = conteoOpciones.map(op => ({
           ...op,
           porcentaje: totalPregunta > 0 ? (op.conteo / totalPregunta) * 100 : 0
         }));
-
         return {
           idpregunta: pregunta.idpregunta,
           pregunta: pregunta.pregunta,
@@ -455,16 +442,43 @@ app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
       })
     );
 
-    const totalRespuestasEncuesta = preguntasConRespuestas.reduce((sum, p) => sum + p.total_respuestas, 0);
+    const { data: preguntasAbiertasRaw, error: preguntasAbiertasError } = await supabase
+      .from('pregunta')
+      .select('idpregunta, pregunta, tipo')
+      .eq('encuesta_idencuesta', idencuesta)
+      .eq('tipo', 'abierta');
+
+    if (preguntasAbiertasError) throw preguntasAbiertasError;
+
+    const preguntasAbiertas = await Promise.all(
+      preguntasAbiertasRaw.map(async (pregunta) => {
+        const { data: respuestas, error: respuestasError } = await supabase
+          .from('respuestas')
+          .select('contenido_texto')
+          .eq('pregunta_idpregunta', pregunta.idpregunta)
+          .not('contenido_texto', 'is', null);
+
+        if (respuestasError) return { ...pregunta, respuestas: [] };
+
+        return {
+          idpregunta: pregunta.idpregunta,
+          pregunta: pregunta.pregunta,
+          respuestas: respuestas.map(r => r.contenido_texto),
+        };
+      })
+    );
+
+    const totalRespuestasEncuesta = preguntasOpcionMultiple.reduce((sum, p) => sum + p.total_respuestas, 0);
 
     res.json({
-        totalRespuestas: totalRespuestasEncuesta,
-        preguntas: preguntasConRespuestas
+      totalRespuestas: totalRespuestasEncuesta,
+      preguntasOpcionMultiple: preguntasOpcionMultiple,
+      preguntasAbiertas: preguntasAbiertas,
     });
 
   } catch (error) {
-    console.error('Error fetching survey results:', error);
-    res.status(500).json({ error: error.message || 'An internal server error occurred' });
+    console.error('Error obteniendo los resultados: ', error);
+    res.status(500).json({ error: error.message || 'Ocurrió un error interno' });
   }
 });
 
