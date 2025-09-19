@@ -338,6 +338,150 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
+// ENDPOINT PARA OBTENER TODAS LAS ENCUESTAS (ADMIN)
+app.get('/encuestas/all', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('encuesta')
+      .select(`
+        idencuesta,
+        proyecto:proyecto_idproyecto(nombre),
+        titulo,
+        fecha
+      `);
+    if (error) {
+      console.error('Error Supabase: ', error);
+      return res.status(500).json({ error: error.message || error });
+    }
+
+    const encuestas = data.map(e => ({
+      id: e.idencuesta,
+      proyecto: e.proyecto?.nombre || null,
+      titulo: e.titulo,
+      fecha: e.fecha
+    }));
+
+    res.json(encuestas);
+  } catch (error) {
+    console.error('Error general: ', error);
+    res.status(500).json({ error: error.message || error});
+  }
+});
+
+app.get('/encuestas/:idencuesta/preguntas', async (req, res) => {
+  try {
+    const { idencuesta } = req.params;
+
+    const { data, error } = await supabase
+    .from('pregunta')
+    .select(`
+      idpregunta,
+      encuesta:encuesta_idencuesta(titulo),
+      pregunta,
+      tipo  
+    `)
+    .eq('encuesta_idencuesta', idencuesta);
+
+    if (error) {
+      console.error('Error Supabase: ', error);
+      return res.statusCode(500).json({ error: error.message || error});
+    }
+    if (data.length === 0) {
+      return res.statusCode(404).json({message: 'No se encontraron preguntas para esta encuestas'});
+    }
+
+    const preguntas = data.map((e) => ({
+      id: e.idpregunta,
+      encuesta: e.encuesta?.titulo,
+      pregunta: e.pregunta,
+      tipo: e.tipo
+    }));
+
+    res.json(preguntas);
+  } catch (error) {
+    console.error('Error general: ', error);
+    return res.statusCode(500).json({error: error.message || error });
+  }
+});
+
+app.get('/encuestas/:idencuesta/resultados', async (req, res) => {
+  try {
+    const { idencuesta } = req.params;
+    const { data: preguntasMultiples, error: preguntasMultiplesError } = await supabase
+      .from('pregunta')
+      .select('idpregunta, pregunta, tipo, opcion(idopcion, opcion)')
+      .eq('encuesta_idencuesta', idencuesta)
+      .eq('tipo', 'opcion_multiple');
+
+    if (preguntasMultiplesError) throw preguntasMultiplesError;
+
+    const preguntasOpcionMultiple = await Promise.all(
+      preguntasMultiples.map(async (pregunta) => {
+        const conteoOpciones = await Promise.all(
+          pregunta.opcion.map(async (opcion) => {
+            const { count, error } = await supabase
+              .from('respuestas')
+              .select('*', { count: 'exact', head: true })
+              .eq('idopcion', opcion.idopcion);
+            if (error) return { opcion: opcion.opcion, conteo: 0 };
+            return { opcion: opcion.opcion, conteo: count };
+          })
+        );
+        const totalPregunta = conteoOpciones.reduce((sum, item) => sum + item.conteo, 0);
+        const porcentajesOpciones = conteoOpciones.map(op => ({
+          ...op,
+          porcentaje: totalPregunta > 0 ? (op.conteo / totalPregunta) * 100 : 0
+        }));
+        return {
+          idpregunta: pregunta.idpregunta,
+          pregunta: pregunta.pregunta,
+          tipo: pregunta.tipo,
+          total_respuestas: totalPregunta,
+          opciones: porcentajesOpciones
+        };
+      })
+    );
+
+    const { data: preguntasAbiertasRaw, error: preguntasAbiertasError } = await supabase
+      .from('pregunta')
+      .select('idpregunta, pregunta, tipo')
+      .eq('encuesta_idencuesta', idencuesta)
+      .eq('tipo', 'abierta');
+
+    if (preguntasAbiertasError) throw preguntasAbiertasError;
+
+    const preguntasAbiertas = await Promise.all(
+      preguntasAbiertasRaw.map(async (pregunta) => {
+        const { data: respuestas, error: respuestasError } = await supabase
+          .from('respuestas')
+          .select('contenido_texto')
+          .eq('pregunta_idpregunta', pregunta.idpregunta)
+          .not('contenido_texto', 'is', null);
+
+        if (respuestasError) return { ...pregunta, respuestas: [] };
+
+        return {
+          idpregunta: pregunta.idpregunta,
+          pregunta: pregunta.pregunta,
+          respuestas: respuestas.map(r => r.contenido_texto),
+        };
+      })
+    );
+
+    const totalRespuestasEncuesta = preguntasOpcionMultiple.reduce((sum, p) => sum + p.total_respuestas, 0);
+
+    res.json({
+      totalRespuestas: totalRespuestasEncuesta,
+      preguntasOpcionMultiple: preguntasOpcionMultiple,
+      preguntasAbiertas: preguntasAbiertas,
+    });
+
+  } catch (error) {
+    console.error('Error obteniendo los resultados: ', error);
+    res.status(500).json({ error: error.message || 'Ocurrió un error interno' });
+  }
+});
+
 // Iniciar servidor
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
